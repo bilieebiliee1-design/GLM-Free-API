@@ -11,19 +11,30 @@ import EX from "@/api/consts/exceptions.ts";
 import { createParser } from "eventsource-parser";
 import logger from "@/lib/logger.ts";
 import util from "@/lib/util.ts";
+import environment from "@/lib/environment.ts";
 
 // 模型名称
 const MODEL_NAME = "glm";
 // 默认的智能体ID，GLM4
 const DEFAULT_ASSISTANT_ID = "65940acff94777010aa6b796";
 // 签名密钥（官网变化记得更新）
-const SIGN_SECRET = "8a1317a7468aa3ad86e997d08f3f31cb";
+const SIGN_SECRET = environment.signSecret || "8a1317a7468aa3ad86e997d08f3f31cb";
 // access_token有效期
 const ACCESS_TOKEN_EXPIRES = 3600;
 // 最大重试次数
 const MAX_RETRY_COUNT = 3;
 // 重试延迟
 const RETRY_DELAY = 5000;
+
+// User-Agent列表
+const USER_AGENTS = [
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:124.0) Gecko/20100101 Firefox/124.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0"
+];
+
 // 伪装headers
 const FAKE_HEADERS = {
   "Accept": "application/json, text/plain, */*",
@@ -40,8 +51,6 @@ const FAKE_HEADERS = {
   "Sec-Fetch-Dest": "empty",
   "Sec-Fetch-Mode": "cors",
   "Sec-Fetch-Site": "same-origin",
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
   'X-App-Platform': 'pc',
   'X-App-Version': '0.0.1',
   'X-Device-Brand': '',
@@ -49,6 +58,17 @@ const FAKE_HEADERS = {
   'X-Exp-Groups': 'na_android_config:exp:NA,na_4o_config:exp:4o_A,na_glm4plus_config:exp:open,mainchat_server_app:exp:A,mobile_history_daycheck:exp:a,desktop_toolbar:exp:A,chat_drawing_server:exp:A,drawing_server_cogview:exp:cogview4,app_welcome_v2:exp:B,chat_drawing_streamv2:exp:A,mainchat_rm_fc:exp:add,mainchat_dr:exp:open,chat_auto_entrance:exp:A',
   'X-Lang': 'zh'
 };
+
+/**
+ * 获取伪装headers
+ */
+function getHeaders() {
+  return {
+    ...FAKE_HEADERS,
+    "User-Agent": _.sample(USER_AGENTS)
+  };
+}
+
 // 文件最大大小
 const FILE_MAX_SIZE = 100 * 1024 * 1024;
 // access_token映射
@@ -104,7 +124,7 @@ async function requestToken(refreshToken: string) {
           // Referer: "https://chatglm.cn/main/alltoolsdetail",
           Authorization: `Bearer ${refreshToken}`,
           "Content-Type": "application/json",
-          ...FAKE_HEADERS,
+          ...getHeaders(),
           "X-Device-Id": util.uuid(false),
           "X-Nonce": sign.nonce,
           "X-Request-Id": util.uuid(false),
@@ -195,7 +215,7 @@ async function removeConversation(
         "X-Sign": sign.sign,
         "X-Timestamp": sign.timestamp,
         "X-Nonce": sign.nonce,
-        ...FAKE_HEADERS,
+        ...getHeaders(),
       },
       timeout: 15000,
       validateStatus: () => true,
@@ -270,7 +290,7 @@ async function createCompletion(
       {
         headers: {
           Authorization: `Bearer ${token}`,
-          ...FAKE_HEADERS,
+          ...getHeaders(),
           "X-Device-Id": util.uuid(false),
           "X-Request-Id": util.uuid(false),
           "X-Sign": sign.sign,
@@ -398,7 +418,7 @@ async function createCompletionStream(
           "X-Sign": sign.sign,
           "X-Timestamp": sign.timestamp,
           "X-Nonce": sign.nonce,
-          ...FAKE_HEADERS,
+          ...getHeaders(),
         },
         // 120秒超时
         timeout: 120000,
@@ -508,7 +528,7 @@ async function generateImages(
           "X-Sign": sign.sign,
           "X-Timestamp": sign.timestamp,
           "X-Nonce": sign.nonce,
-          ...FAKE_HEADERS,
+          ...getHeaders(),
         },
         // 120秒超时
         timeout: 120000,
@@ -610,7 +630,7 @@ async function generateVideos(
           "X-Sign": sign.sign,
           "X-Timestamp": sign.timestamp,
           "X-Nonce": sign.nonce,
-          ...FAKE_HEADERS,
+          ...getHeaders(),
         },
         // 30秒超时
         timeout: 30000,
@@ -639,7 +659,7 @@ async function generateVideos(
             "X-Sign": sign.sign,
             "X-Timestamp": sign.timestamp,
             "X-Nonce": sign.nonce,
-            ...FAKE_HEADERS,
+            ...getHeaders(),
           },
           // 30秒超时
           timeout: 30000,
@@ -680,7 +700,7 @@ async function generateVideos(
                 "X-Sign": sign.sign,
                 "X-Timestamp": sign.timestamp,
                 "X-Nonce": sign.nonce,
-                ...FAKE_HEADERS,
+                ...getHeaders(),
               },
               // 30秒超时
               timeout: 30000,
@@ -711,7 +731,7 @@ async function generateVideos(
           Referer: "https://chatglm.cn/video",
           "X-Device-Id": util.uuid(false),
           "X-Request-Id": util.uuid(false),
-          ...FAKE_HEADERS,
+          ...getHeaders(),
         },
         validateStatus: () => true,
       })
@@ -980,7 +1000,7 @@ async function uploadFile(
       Referer: isVideoImage
         ? "https://chatglm.cn/video"
         : "https://chatglm.cn/",
-      ...FAKE_HEADERS,
+      ...getHeaders(),
       ...formData.getHeaders(),
     },
     validateStatus: () => true,
@@ -1509,7 +1529,7 @@ async function getTokenLiveStatus(refreshToken: string) {
         "X-Sign": sign.sign,
         "X-Timestamp": sign.timestamp,
         "X-Nonce": sign.nonce,
-        ...FAKE_HEADERS,
+        ...getHeaders(),
       },
       timeout: 15000,
       validateStatus: () => true,
