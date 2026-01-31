@@ -1080,15 +1080,34 @@ async function receiveStream(model: string, stream: any): Promise<any> {
         if (result.status != "finish") {
             // 更新缓存的parts
             if (result.parts) {
-              result.parts.forEach((part: any) => {
-                const index = cachedParts.findIndex((p) => p.logic_id === part.logic_id);
-                if (index !== -1) {
-                  cachedParts[index] = part;
-                } else {
-                  cachedParts.push(part);
-                }
-              });
+              // 深度优化：假定 upstream 发送的是全量 parts 列表 (Snapshot)，直接替换缓存
+              // 这样可以避免因 logic_id 变更或合并导致的重复/幽灵内容问题
+              cachedParts.length = 0;
+              cachedParts.push(...result.parts);
             }
+
+            // 1. Collect Search Results
+            const searchMap = new Map<string, any>();
+            cachedParts.forEach((part) => {
+                if (!part.content || !_.isArray(part.content)) return;
+                const { meta_data } = part;
+                part.content.forEach((item: any) => {
+                     if (
+                          item.type == "tool_result" &&
+                          meta_data?.tool_result_extra?.search_results
+                        ) {
+                           meta_data.tool_result_extra.search_results.forEach((res: any) => {
+                               if (res.match_key) {
+                                   searchMap.set(res.match_key, res);
+                               }
+                           });
+                        }
+                });
+            });
+
+            // 2. Prepare for renumbering
+            const keyToIdMap = new Map<string, number>();
+            let counter = 1;
 
             // 全量重建所有 parts 的文本和思考内容
             let fullText = "";
@@ -1113,7 +1132,25 @@ async function receiveStream(model: string, stream: any): Promise<any> {
                     } = value;
 
                     if (type == "text") {
-                        partText += text;
+                        let txt = text;
+                        if (searchMap.size > 0) {
+                             // Match any turnXsearchY pattern, with optional brackets
+                             txt = txt.replace(/【?(turn\d+[a-zA-Z]+\d+)】?/g, (match: string, key: string) => {
+                                 const searchInfo = searchMap.get(key);
+                                 if (!searchInfo) {
+                                     return match; // Keep original if not found
+                                 }
+
+                                 // Assign new ID if not exists
+                                 if (!keyToIdMap.has(key)) {
+                                     keyToIdMap.set(key, counter++);
+                                 }
+                                 const newId = keyToIdMap.get(key);
+                                 
+                                 return ` [${newId}](${searchInfo.url})`;
+                             });
+                        }
+                        partText += txt;
                     } else if (type == "think" && !isSilentModel) {
                         partReasoning += think;
                     } else if (
@@ -1127,7 +1164,7 @@ async function receiveStream(model: string, stream: any): Promise<any> {
                           (meta: string, v: any) => meta + `> 检索 ${v.title}(${v.url}) ...\n`,
                           ""
                        );
-                       partText += searchText;
+                       partReasoning += searchText;
                     } else if (
                       type == "quote_result" &&
                       part.status == "finish" &&
@@ -1139,7 +1176,7 @@ async function receiveStream(model: string, stream: any): Promise<any> {
                           (meta: string, v: any) => meta + `> 检索 ${v.title}(${v.url}) ...\n`,
                           ""
                        );
-                       partText += searchText;
+                       partReasoning += searchText;
                     } else if (
                       type == "image" &&
                       _.isArray(image) &&
@@ -1301,7 +1338,7 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
                     let txt = text;
                     if (searchMap.size > 0) {
                          // Match any turnXsearchY pattern, with optional brackets
-                         txt = txt.replace(/【?(turn\d+search\d+)】?/g, (match: string, key: string) => {
+                         txt = txt.replace(/【?(turn\d+[a-zA-Z]+\d+)】?/g, (match: string, key: string) => {
                              const searchInfo = searchMap.get(key);
                              if (!searchInfo) {
                                  return match; // Keep original if not found
@@ -1330,7 +1367,7 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
                       (meta: string, v: any) => meta + `> 检索 ${v.title}(${v.url}) ...\n`,
                       ""
                    );
-                   partText += searchText;
+                   partReasoning += searchText;
                 } else if (
                   type == "quote_result" &&
                   part.status == "finish" &&
@@ -1342,7 +1379,7 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
                       (meta: string, v: any) => meta + `> 检索 ${v.title}(${v.url}) ...\n`,
                       ""
                    );
-                   partText += searchText;
+                   partReasoning += searchText;
                 } else if (
                   type == "image" &&
                   _.isArray(image) &&
@@ -1439,7 +1476,9 @@ function createTransStream(model: string, stream: any, endCallback?: Function) {
     }
   });
   // 将流数据喂给SSE转换器
-  stream.on("data", (buffer) => parser.feed(buffer.toString()));
+  // 深度优化：使用 TextDecoder 处理 buffer，防止多字节字符被截断
+  const decoder = new TextDecoder("utf-8");
+  stream.on("data", (buffer) => parser.feed(decoder.decode(buffer, { stream: true })));
   stream.once(
     "error",
     () => !transStream.closed && transStream.end("data: [DONE]\n\n")
